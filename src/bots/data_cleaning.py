@@ -341,7 +341,7 @@ def main():
     -------
     None
     """
-    logging.info(f"Starting Twitbot-20 dataset cleaning process")
+    logging.info(f"Starting Cresci-2017 dataset cleaning process")
 
     all_users_dfs = []
     all_tweets_dfs = []
