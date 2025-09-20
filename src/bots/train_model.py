@@ -30,12 +30,11 @@ logging.basicConfig(
 
 # Path definitions
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-FEATURES_PATH = BASE_DIR / "data" / "stats" / "cresci2017_features.csv"
+FEATURES_PATH = BASE_DIR / "data" / "processed" / "bots" / "cresci2017_features.csv"
 MODEL_DIR = BASE_DIR / "models" / "bots"
 
 # Create model directory if it doesn't exist
 os.makedirs(MODEL_DIR, exist_ok=True)
-
 
 def load_features(file_path=None):
     """
@@ -70,7 +69,6 @@ def load_features(file_path=None):
     except Exception as e:
         logging.error(f"Error loading features: {str(e)}")
         return None
-
 
 def prepare_data_for_training(features_df, test_size=0.2, random_state=42):
     """
@@ -137,7 +135,6 @@ def prepare_data_for_training(features_df, test_size=0.2, random_state=42):
     logging.info(f"Class distribution in test: {np.bincount(y_test.astype(int))}")
 
     return X_train, X_test, y_train, y_test, feature_columns
-
 
 def create_feature_interactions(X_train, X_test, top_features=None, degree=2):
     """
@@ -213,7 +210,6 @@ def create_feature_interactions(X_train, X_test, top_features=None, degree=2):
 
     logging.info(f"Created {X_train_poly.shape[1]} features with polynomial interactions")
     return X_train_poly, X_test_poly, poly_feature_names
-
 
 def select_features_with_rf(X_train, y_train, X_test, feature_names, threshold='mean'):
     """
@@ -291,7 +287,6 @@ def select_features_with_rf(X_train, y_train, X_test, feature_names, threshold='
 
     return X_train_selected, X_test_selected, selected_feature_names, importance_dict
 
-
 def train_random_forest(X_train, y_train, feature_names=None, enhance_importance=True):
     """
     Train a Random Forest model with parameters optimized for better feature importance
@@ -335,10 +330,10 @@ def train_random_forest(X_train, y_train, feature_names=None, enhance_importance
                 n_estimators=200,
                 max_depth=None,
                 min_samples_split=5,  # Increased from 2
-                min_samples_leaf=2,  # Increased from 1
+                min_samples_leaf=2,   # Increased from 1
                 max_features='sqrt',  # 'sqrt' usually gives better feature importance distribution
                 bootstrap=True,
-                oob_score=True,  # Out-of-bag scoring provides better estimates
+                oob_score=True,       # Out-of-bag scoring provides better estimates
                 random_state=42,
                 n_jobs=-1,
                 class_weight='balanced'  # Handle class imbalance
@@ -364,10 +359,10 @@ def train_random_forest(X_train, y_train, feature_names=None, enhance_importance
                 n_estimators=200,
                 max_depth=None,
                 min_samples_split=5,  # Increased from 2
-                min_samples_leaf=2,  # Increased from 1
+                min_samples_leaf=2,   # Increased from 1
                 max_features='sqrt',  # 'sqrt' usually gives better feature importance distribution
                 bootstrap=True,
-                oob_score=True,  # Out-of-bag scoring provides better estimates
+                oob_score=True,       # Out-of-bag scoring provides better estimates
                 random_state=42,
                 n_jobs=-1,
                 class_weight='balanced'  # Handle class imbalance
@@ -389,14 +384,13 @@ def train_random_forest(X_train, y_train, feature_names=None, enhance_importance
 
         logging.info("Feature ranking:")
         for f in range(min(10, len(feature_names))):
-            logging.info(f"{f + 1}. {feature_names[indices[f]]}: {importances[indices[f]]:.4f}")
+            logging.info(f"{f+1}. {feature_names[indices[f]]}: {importances[indices[f]]:.4f}")
 
         result['feature_names'] = feature_names
         result['feature_importances'] = importances
         result['feature_indices'] = indices
 
     return result
-
 
 def evaluate_model(model_result, X_test, y_test):
     """
@@ -450,7 +444,6 @@ def evaluate_model(model_result, X_test, y_test):
         metrics['oob_score'] = model_result['rf_model'].oob_score_
 
     return metrics
-
 
 def visualize_feature_importance(model_result, vis_dir):
     """
@@ -535,8 +528,7 @@ def visualize_feature_importance(model_result, vis_dir):
         importance_df = importance_df.set_index('Feature')
 
         # Create heatmap
-        sns.heatmap(importance_df.T, annot=True, cmap='YlGnBu', fmt='.4f', linewidths=.5,
-                    cbar_kws={'label': 'Importance Score'})
+        sns.heatmap(importance_df.T, annot=True, cmap='YlGnBu', fmt='.4f', linewidths=.5, cbar_kws={'label': 'Importance Score'})
         plt.title('Top 30 Feature Importance Heatmap', fontsize=18)
         plt.tight_layout()
 
@@ -547,7 +539,6 @@ def visualize_feature_importance(model_result, vis_dir):
         logging.info(f"Feature importance heatmap saved to {heatmap_path}")
 
     return vis_files
-
 
 def save_model(model_result, metrics=None):
     """
@@ -593,7 +584,6 @@ def save_model(model_result, metrics=None):
         logging.info(f"Metrics saved to {metrics_path}")
 
     return str(model_path)
-
 
 def enhance_feature_importance(X_train, X_test, y_train, y_test, feature_names):
     """
@@ -647,28 +637,8 @@ def enhance_feature_importance(X_train, X_test, y_train, y_test, feature_names):
 
     return model_result, metrics
 
-
 def main():
-    """
-    Execute comprehensive bot detection model training pipeline with enhanced feature importance analysis.
-
-    Orchestrates the complete machine learning workflow from feature loading through model
-    training, evaluation, and persistence. Implements advanced feature engineering techniques
-    including polynomial interactions, feature selection, and importance visualization to
-    optimize bot detection performance.
-
-    Returns
-    -------
-    None
-        Function performs side effects (model training, file I/O, logging) but returns no value.
-        Success indicated through log messages and creation of model artifacts.
-
-    Raises
-    ------
-    SystemExit
-        Implicitly exits if critical input files cannot be loaded or data preparation fails,
-        preventing downstream processing errors and incomplete model training.
-    """
+    """Main function to run the model training pipeline"""
     logging.info("Starting bot detection model training with enhanced feature importance")
 
     # Load pre-processed feature data
@@ -694,7 +664,6 @@ def main():
     save_model(model_result, metrics)
 
     logging.info("Bot detection model training with enhanced feature importance completed")
-
 
 if __name__ == "__main__":
     main()
