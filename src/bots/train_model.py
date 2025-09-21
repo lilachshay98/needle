@@ -421,7 +421,7 @@ def evaluate_model(model_result, X_test, y_test):
     model = model_result['model']
 
     # Make predictions
-    y_pred = model.predict(X_test)
+    y_pred = model.predict_news(X_test)
 
     # Calculate metrics
     accuracy = accuracy_score(y_test, y_pred)

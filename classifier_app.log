@@ -59,3 +59,19 @@
 2025-09-13 20:14:52,563 - INFO - Loading random_forest model from /Users/lilachshay/fake_news_detection/models/random_forest_model.joblib
 2025-09-13 20:14:52,844 - INFO - Loaded bot detection model from /Users/lilachshay/fake_news_detection/models/bots/random_forest_bot_detector_latest.joblib
 2025-09-13 20:14:52,844 - INFO - All models loaded successfully
+2025-09-21 11:45:45,131 - INFO - Starting classification application...
+2025-09-21 11:45:45,132 - INFO - Loading vectorizer from /Users/lilachshay/fake_news_detection/models/tfidf_vectorizer.joblib
+2025-09-21 11:45:45,546 - INFO - Loading naive_bayes model from /Users/lilachshay/fake_news_detection/models/naive_bayes_model.joblib
+2025-09-21 11:45:45,553 - INFO - Loading logistic_regression model from /Users/lilachshay/fake_news_detection/models/logistic_regression_model.joblib
+2025-09-21 11:45:45,707 - INFO - Loading decision_tree model from /Users/lilachshay/fake_news_detection/models/decision_tree_model.joblib
+2025-09-21 11:45:45,826 - INFO - Loading random_forest model from /Users/lilachshay/fake_news_detection/models/random_forest_model.joblib
+2025-09-21 11:45:46,118 - INFO - Loaded bot detection model from /Users/lilachshay/fake_news_detection/models/bots/random_forest_bot_detector_latest.joblib
+2025-09-21 11:45:46,118 - INFO - All models loaded successfully
+2025-09-21 11:47:41,790 - INFO - Starting classification application...
+2025-09-21 11:47:41,790 - INFO - Loading vectorizer from /Users/lilachshay/fake_news_detection/models/tfidf_vectorizer.joblib
+2025-09-21 11:47:42,109 - INFO - Loading naive_bayes model from /Users/lilachshay/fake_news_detection/models/naive_bayes_model.joblib
+2025-09-21 11:47:42,112 - INFO - Loading logistic_regression model from /Users/lilachshay/fake_news_detection/models/logistic_regression_model.joblib
+2025-09-21 11:47:42,181 - INFO - Loading decision_tree model from /Users/lilachshay/fake_news_detection/models/decision_tree_model.joblib
+2025-09-21 11:47:42,225 - INFO - Loading random_forest model from /Users/lilachshay/fake_news_detection/models/random_forest_model.joblib
+2025-09-21 11:47:42,438 - INFO - Loaded bot detection model from /Users/lilachshay/fake_news_detection/models/bots/random_forest_bot_detector_latest.joblib
+2025-09-21 11:47:42,439 - INFO - All models loaded successfully

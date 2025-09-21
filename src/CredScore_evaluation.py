@@ -1,12 +1,14 @@
-import json
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.metrics import roc_curve, auc, confusion_matrix
-from shared_logic import NewsClassifier
+from CredScore_implementation import CredScore
 from pathlib import Path
 import seaborn as sns
+from tqdm import tqdm
 
 # adjusting file paths
 ROOT = Path(__file__).resolve().parents[1]  # goes from src/ up to project root
@@ -33,6 +35,7 @@ class ConfusionMatrixMetrics:
     tn : int
         True negatives - correctly predicted negative instances.
     """
+
     def __init__(self, tp, fp, fn, tn):
         """
         Initialize ConfusionMatrixMetrics with confusion matrix components.
@@ -158,55 +161,6 @@ class ConfusionMatrixMetrics:
             cm = cm / total
         return cm
 
-    def plot_confusion_matrix(self, title, save_path):
-        """
-        Plot and save confusion matrix as a heatmap.
-
-        Parameters
-        ----------
-        title : str
-            Title for the plot
-        save_path : str
-            Path to save the figure. If None, only displays.
-
-        Returns
-        -------
-        fig : matplotlib.figure.Figure
-            The figure object
-        """
-        class_names = ['Fake', 'Real']
-
-        cm = self.confusion_matrix()
-
-        # Create figure and axis
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Create heatmap
-        sns.heatmap(cm, annot=True, fmt='.3f', cmap='Blues',
-                    xticklabels=['Predicted ' + class_names[0], 'Predicted ' + class_names[1]],
-                    yticklabels=['Actual ' + class_names[0], 'Actual ' + class_names[1]],
-                    cbar_kws={'label': 'Normalized Frequency'}, ax=ax)
-
-        # Add title and labels
-        ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
-        ax.set_xlabel('Predicted Class', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Actual Class', fontsize=12, fontweight='bold')
-
-        # Add text annotations with percentages
-        for i in range(2):
-            for j in range(2):
-                percentage = cm[i, j] * 100
-                ax.text(j + 0.5, i + 0.7, f'({percentage:.1f}%)',
-                        ha='center', va='center', fontsize=10,
-                        color='white' if cm[i, j] > 0.5 else 'black')
-
-        plt.tight_layout()
-        # Save if path provided
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Confusion matrix saved to: {save_path}")
-        plt.show()
-        return fig
-
     def report(self):
         """
         Generate a comprehensive dictionary of classification metrics.
@@ -280,62 +234,85 @@ class ConfusionMatrixMetrics:
         plt.show()
 
 
+def safe_date_conversion(utc_timestamp):
+    return pd.to_datetime(utc_timestamp, unit='s').strftime('%Y-%m-%d')
+
+
 if __name__ == "__main__":
 
     # Initialize classifier
-    classifier = NewsClassifier()
+    classifier = CredScore()
 
-    # # News Articles evaluation
-    #
-    # # load the test dataset
-    # fakeddit_df = pd.read_csv(ROOT / DATA / "all_validate.tsv", sep='\t')
+    # # Load the full dataset
+    # fakeddit_df = pd.read_csv(DATA / "all_validate.tsv", sep='\t')
     # fakeddit_df = fakeddit_df.dropna(subset=['clean_title', '2_way_label'])
     #
-    # # Sample 20% of the data randomly
-    # sample_size = int(len(fakeddit_df) * 0.20)
-    # fakeddit_df_sample = fakeddit_df.sample(n=sample_size, random_state=42).reset_index(drop=True)
+    # # Create two splits
+    # validation_size = int(len(fakeddit_df) * 0.02)
+    # test_size = int(len(fakeddit_df) * 0.15)  # 15% for final evaluation
     #
-    # # Extract text and labels from the sampled data
-    # X_test = fakeddit_df_sample['clean_title'].reset_index(drop=True)
-    # y_test = fakeddit_df_sample['2_way_label'].reset_index(drop=True)
+    # # Split 1: Validation set (for threshold optimization)
+    # validation_df = fakeddit_df.sample(n=validation_size, random_state=123)
+    # remaining_df = fakeddit_df.drop(validation_df.index)
     #
-    # domains = fakeddit_df.get('domain', [None] * len(X_test))
-    # urls = fakeddit_df.get('url', [None] * len(X_test))
-    # dates = fakeddit_df.get('created_utc', [None] * len(X_test))
+    # # Split 2: Test set (for final evaluation)
+    # test_df = remaining_df.sample(n=test_size, random_state=42)
     #
-    # # Prepare lists for true and predicted labels
+    # val_texts = validation_df['clean_title'].tolist()
+    # val_labels = validation_df['2_way_label'].tolist()
+    # val_domains = validation_df['domain'].tolist() if 'domain' in validation_df.columns else None
+    # val_dates = validation_df['created_utc'].apply(safe_date_conversion).tolist()
+    # val_urls = validation_df['image_url'].tolist() if 'image_url' in validation_df.columns else None
+    #
+    # # Find optimal threshold
+    # optimal_threshold = classifier.find_optimal_threshold(validation_texts=val_texts, validation_labels=val_labels,
+    #                                                       validation_domains=val_domains, validation_dates=val_dates,
+    #                                                       validation_urls=val_urls)
+    # # Set the optimal threshold
+    # classifier.set_threshold(optimal_threshold)
+    #
+    # # Prepare test data
+    # test_df['created_date_str'] = test_df['created_utc'].apply(safe_date_conversion)
+    #
+    # X_test = test_df['clean_title'].reset_index(drop=True)
+    # y_test = test_df['2_way_label'].reset_index(drop=True)
+    #
+    # domains = test_df['domain'] if 'domain' in test_df.columns else pd.Series([None] * len(X_test))
+    # urls = test_df['url'] if 'url' in test_df.columns else pd.Series([None] * len(X_test))
+    # dates = test_df['created_date_str']
+    #
+    # # Run final predictions
     # news_true_labels = []
     # news_predicted_labels = []
     # news_probability_scores = []
     #
-    # # Make predictions using NewsClassifier
-    # for idx in range(len(X_test)):
-    #     text = X_test.iloc[idx] if hasattr(X_test, 'iloc') else X_test[idx]
-    #     true_label = y_test.iloc[idx] if hasattr(y_test, 'iloc') else y_test[idx]
+    # for idx in tqdm(range(len(X_test)), desc="Final evaluation predictions"):
+    #     text = X_test.iloc[idx]
+    #     true_label = y_test.iloc[idx]
     #
-    #     domain = domains.iloc[idx] if hasattr(domains, 'iloc') and domains.iloc[idx] is not None else None
-    #     url = urls.iloc[idx] if hasattr(urls, 'iloc') and urls.iloc[idx] is not None else None
+    #     domain = domains.iloc[idx] if hasattr(domains, 'iloc') and pd.notna(domains.iloc[idx]) else None
+    #     url = urls.iloc[idx] if hasattr(urls, 'iloc') and pd.notna(urls.iloc[idx]) else None
+    #     date = dates.iloc[idx] if hasattr(dates, 'iloc') and dates.iloc[idx] != "" else ""
     #
-    #     # Use the advanced predict method
-    #     prediction_result = classifier.predict(text=text, domain=domain, date="", url=url)
+    #     prediction_result = classifier.predict_news(text=text, domain=domain, date=date, url=url)
     #
     #     if prediction_result is not None:
-    #         predicted_label = prediction_result['prediction']  # 0 or 1
-    #         fake_prob_score = prediction_result['fake_probability'] / 100.0
+    #         predicted_label = prediction_result['prediction']
+    #         real_prob_score = prediction_result['real_probability'] / 100.0
     #
     #         news_true_labels.append(true_label)
     #         news_predicted_labels.append(predicted_label)
-    #         news_probability_scores.append(fake_prob_score)
+    #         news_probability_scores.append(real_prob_score)
     #
-    # # Calculate confusion matrix for news
+    # # Calculate confusion matrix
     # news_cm = confusion_matrix(news_true_labels, news_predicted_labels)
     # news_tn, news_fp, news_fn, news_tp = news_cm.ravel()
     #
-    # # Create metrics instance for news
+    # # Create metrics and generate reports
     # news_metrics = ConfusionMatrixMetrics(tp=news_tp, fp=news_fp, fn=news_fn, tn=news_tn)
     #
     # news_report = news_metrics.report()
-    # print("=== NEWS ARTICLES EVALUATION ===")
+    # print("=== OPTIMIZED NEWS ARTICLES EVALUATION ===")
     # print("Confusion Matrix:\n", news_metrics.confusion_matrix())
     # print(f"True Negatives (TN): {news_tn}")
     # print(f"False Positives (FP): {news_fp}")
@@ -345,79 +322,37 @@ if __name__ == "__main__":
     # for k, v in news_report.items():
     #     print(f"{k.capitalize()}: {v:.4f}")
     #
-    # # Convert to numpy arrays
+    # # Convert to numpy arrays for plotting
     # news_true_labels = np.array(news_true_labels)
     # news_probability_scores = np.array(news_probability_scores)
     #
-    # # Plot ROC curve and confusion matrix
-    # news_metrics.plot_roc_curve(news_true_labels, news_probability_scores, "News Articles Detection ROC Curve",
-    #                FIGS / "news_roc_curve.png")
-    # news_metrics.plot_confusion_matrix("News Articles - Normalized Confusion Matrix Heatmap", "news_cm_heatmap.png")
-    #
-    # print("\n" + "="*50 + "\n")
+    # # Create visualizations
+    # news_metrics.plot_roc_curve(news_true_labels, news_probability_scores,
+    #                             "News Articles Detection ROC Curve",
+    #                             FIGS / "news_roc_curve.png")
 
+    #
     # Bot Detection evaluation
 
     # load the test dataset
-    # tweets_test_df = pd.read_csv(ROOT / DATA / "test.json")
-    # tweets_test_df = tweets_test_df.dropna(subset=['tweet', 'BinaryNumTarget'])
-    #
-    # # Sample 20% of the data randomly
-    # sample_size = int(len(tweets_test_df) * 0.05)
-    # tweets_test_df_sample = tweets_test_df.sample(n=sample_size, random_state=42).reset_index(drop=True)
-    #
-    # # Extract text and labels from the sampled data
-    # X_test = tweets_test_df_sample['tweet'].reset_index(drop=True)
-    # y_test = tweets_test_df_sample['BinaryNumTarget'].reset_index(drop=True)  # 1=human, 0=bot
+    tweets_test_df = pd.read_csv(DATA / "Features_For_Traditional_ML_Techniques.csv")
+    tweets_test_df = tweets_test_df.dropna(subset=['tweet', 'BotScoreBinary'])
 
-    # Load JSON file instead of CSV
-    with open(ROOT / DATA / "test.json", 'r') as f:
-        data = json.load(f)
-
-    # Convert JSON data to DataFrame
-    tweets_data = []
-    for entry in data:
-        # Extract tweets from the 'tweet' array with null checking
-        tweets = entry.get('tweet', [])
-
-        # Handle cases where tweets field is None or not a list
-        if tweets is None:
-            tweets = []
-        elif not isinstance(tweets, list):
-            tweets = [str(tweets)]
-
-        label = int(entry.get('label', 0))  # Convert string label to int
-
-        if tweets:
-            # Create a row for each tweet
-            for tweet_text in tweets:
-                if tweet_text and tweet_text.strip():
-                    tweets_data.append({
-                        'tweet': tweet_text,
-                        'label': label  # 1=human, 0=bot based on your JSON structure
-                    })
-
-    # Create DataFrame
-    tweets_test_df = pd.DataFrame(tweets_data)
-
-    # Drop rows with missing tweet text or labels
-    tweets_test_df = tweets_test_df.dropna(subset=['tweet', 'label'])
-
-    # Sample 5% of the data randomly
-    sample_size = int(len(tweets_test_df) * 0.05)
+    # Sample 15% of the data randomly
+    sample_size = int(len(tweets_test_df) * 0.15)
     tweets_test_df_sample = tweets_test_df.sample(n=sample_size, random_state=42).reset_index(drop=True)
 
     # Extract text and labels from the sampled data
     X_test = tweets_test_df_sample['tweet'].reset_index(drop=True)
-    y_test = tweets_test_df_sample['label'].reset_index(drop=True)  # 1=human, 0=bot
+    y_test = tweets_test_df_sample['BotScoreBinary'].reset_index(drop=True)  # 1=human, 0=bot
 
     # Prepare lists for true and predicted labels
     tweets_true_labels = []
     tweets_predicted_labels = []
     tweets_probability_scores = []
 
-    # Make predictions using NewsClassifier bot detection
-    for idx in range(len(X_test)):
+    # Make predictions using CredScore bot detection
+    for idx in tqdm(range(len(X_test)), desc="Final evaluation predictions"):
         text = X_test.iloc[idx] if hasattr(X_test, 'iloc') else X_test[idx]
         true_label = y_test.iloc[idx] if hasattr(y_test, 'iloc') else y_test[idx]
 
@@ -434,7 +369,7 @@ if __name__ == "__main__":
             'retweets': tweets_test_df_sample.iloc[idx].get('retweets', 0.2),
             'replies': tweets_test_df_sample.iloc[idx].get('replies', 0.1),
             'favoriteC': tweets_test_df_sample.iloc[idx].get('favoriteC', 0.3),
-            'hashtag': tweets_test_df_sample.iloc[idx].get('hashtag', 0.3),
+            'hashtag': tweets_test_df_sample.iloc[idx].get('hashtags', 0.3),
             'mentions': tweets_test_df_sample.iloc[idx].get('mentions', 0.4),
             'intertime': tweets_test_df_sample.iloc[idx].get('intertime', 3600),
             'favorites': tweets_test_df_sample.iloc[idx].get('favourites', 100),
@@ -453,14 +388,14 @@ if __name__ == "__main__":
         prediction_result = classifier.predict_bot(tweet_text=text, user_data=user_data)
 
         if prediction_result is not None and 'prediction' in prediction_result:
-            predicted_label = prediction_result['prediction']  # 0=human, 1=bot
+            predicted_label = prediction_result['prediction']  # 1=human, 0=bot
             bot_prob_score = prediction_result['bot_probability'] / 100.0
 
             tweets_true_labels.append(true_label)
             tweets_predicted_labels.append(predicted_label)
             tweets_probability_scores.append(bot_prob_score)
 
-    # Calculate confusion matrix for tweets (FIXED VARIABLES)
+    # Calculate confusion matrix for tweets
     tweets_cm = confusion_matrix(tweets_true_labels, tweets_predicted_labels)
     tweets_tn, tweets_fp, tweets_fn, tweets_tp = tweets_cm.ravel()
 
@@ -484,6 +419,5 @@ if __name__ == "__main__":
 
     # Plot ROC curve
     tweets_metrics.plot_roc_curve(tweets_true_labels, tweets_probability_scores, "Bot Detection ROC Curve",
-                   FIGS / "tweets_roc_curve.png")
-    tweets_metrics.plot_confusion_matrix("Twitter Accounts - Normalized Confusion Matrix Heatmap", "tweets_cm_heatmap"
-                                                                                                   ".png")
+                                  FIGS / "tweets_roc_curve.png")
+

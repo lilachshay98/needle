@@ -6,7 +6,7 @@ import os
 import logging
 import colorama
 from colorama import Fore, Style
-from shared_logic import NewsClassifier
+from CredScore_implementation import CredScore
 from page_rank import extract_domain
 
 # Setup logging
@@ -144,7 +144,7 @@ def main():
         Handles user input validation and provides feedback for
         invalid selections.
     """
-    classifier = NewsClassifier()
+    classifier = CredScore()
 
     while True:
         print_header()
@@ -183,7 +183,7 @@ def process_article(classifier):
 
     Parameters
     ----------
-    classifier : NewsClassifier
+    classifier : CredScore
         Initialized classifier object for performing predictions.
 
     Returns
@@ -220,7 +220,7 @@ def process_article(classifier):
             logging.info(f"Domain extracted from URL: {domain}")
 
     # Classify the article with the URL for page rank analysis
-    result = classifier.predict(article_text, domain, "", url)
+    result = classifier.predict_news(article_text, domain, "", url)
 
     # Display result
     if result:
@@ -240,7 +240,7 @@ def process_tweet(classifier):
 
     Parameters
     ----------
-    classifier : NewsClassifier
+    classifier : CredScore
         Initialized classifier object for performing bot detection.
 
     Returns

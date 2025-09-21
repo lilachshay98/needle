@@ -12,7 +12,7 @@ import networkx as nx
 import pandas as pd
 import matplotlib
 
-from shared_logic import NewsClassifier
+from CredScore_implementation import CredScore
 from src.page_rank import extract_domain, build_graph_from_edges, scrape_outlinks_one
 
 matplotlib.use('Agg')
@@ -674,9 +674,9 @@ class ContentClassifierUI:
 
     def load_models(self):
         """
-        Load machine learning models and domain data using NewsClassifier.
+        Load machine learning models and domain data using CredScore.
 
-        Initializes the NewsClassifier instance which loads all necessary
+        Initializes the CredScore instance which loads all necessary
         models for content classification and bot detection. Updates UI
         state based on loading success or failure.
 
@@ -693,9 +693,9 @@ class ContentClassifierUI:
             error dialog.
         """
         try:
-            logging.info("Initializing NewsClassifier to load models")
-            # Create an instance of NewsClassifier which will load all models
-            self.classifier = NewsClassifier()
+            logging.info("Initializing CredScore to load models")
+            # Create an instance of CredScore which will load all models
+            self.classifier = CredScore()
 
             # Store references to models that the UI needs to access
             self.vectorizer = self.classifier.vectorizer
@@ -979,7 +979,7 @@ class ContentClassifierUI:
         Notes
         -----
         Performs domain extraction from URL if URL is provided but
-        domain is not. Uses the NewsClassifier to predict article
+        domain is not. Uses the CredScore to predict article
         authenticity and displays formatted results with probabilities.
         """
         if not self.models_loaded:
@@ -1015,7 +1015,7 @@ class ContentClassifierUI:
         try:
             # Use the classifier to analyze the text
             account_date = ""
-            result = self.classifier.predict(news_text, domain, account_date, url)
+            result = self.classifier.predict_news(news_text, domain, account_date, url)
 
             if result:
                 # Add the result type for UI processing
@@ -1054,7 +1054,7 @@ class ContentClassifierUI:
         - Calculated metrics (ratios, age, etc.)
 
         Performs both bot detection and content analysis using the
-        NewsClassifier and displays results in a combined format.
+        CredScore and displays results in a combined format.
         """
         if not self.models_loaded:
             messagebox.showinfo("Please Wait", "Models are still loading. Please try again in a moment.")
@@ -1152,7 +1152,7 @@ class ContentClassifierUI:
                 bot_result = self.classifier.predict_bot(tweet_text, user_data)
 
                 # Also analyze the tweet content using the shared logic's predict method
-                content_result = self.classifier.predict(tweet_text, "", account_date)
+                content_result = self.classifier.predict_news(tweet_text, "", account_date)
 
             # Format combined results
             combined_result = {
@@ -1187,12 +1187,12 @@ class ContentClassifierUI:
         Returns
         -------
         result : dict
-            Bot detection result from NewsClassifier.predict_bot().
+            Bot detection result from CredScore.predict_bot().
 
         Notes
         -----
         This method exists for backwards compatibility but should not be
-        called directly. Use the NewsClassifier instance instead.
+        called directly. Use the CredScore instance instead.
         """
         return self.classifier.predict_bot(tweet_text, user_data)
 

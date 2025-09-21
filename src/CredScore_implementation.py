@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import csv
 import logging
 import math
@@ -5,15 +7,21 @@ import os
 import string
 import sys
 from datetime import datetime
+from sklearn.metrics import f1_score, accuracy_score
+import numpy as np
+from tqdm import tqdm
+import warnings
+import re
+import networkx as nx
 
 import pandas as pd
 from joblib import load
 
 from colorama import Fore, Style
 
-from ClassificationModel.src.community_detection import load_accounts, build_follow_graph, top_mentions, subgraph_around_anchors, \
-    louvain_partition, analyze_communities, predict_account_label
-from ClassificationModel.src.page_rank import extract_domain, build_graph_from_edges, scrape_outlinks_one
+from community_detection import load_accounts, build_follow_graph, top_mentions, \
+    subgraph_around_anchors, louvain_partition, analyze_communities, predict_account_label
+from page_rank import extract_domain, build_graph_from_edges, scrape_outlinks_one
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,20 +29,58 @@ MODELS_DIR = os.path.join(BASE_DIR, 'models')
 STATS_DIR = os.path.join(BASE_DIR, 'data/stats')
 
 
-TRUSTED_PLATFORMS = {
-    'bbc.com': 0.9,
-    'cnn.com': 0.95,
-    'reuters.com': 0.92,
-    'nytimes.com': 0.93,
-    'theguardian.com': 0.91
-}
+class CredScore:
+    """
+    Comprehensive credibility assessment system for news articles and social media content.
 
+    Integrates multiple machine learning models and external signals to provide
+    credibility scores for news articles and bot detection for social media accounts.
 
-class NewsClassifier:
-    """Class to classify news articles and tweets"""
+    The system uses:
+    - Ensemble of 4 ML models for text classification
+    - Domain reputation scoring based on historical data
+    - PageRank analysis for URL credibility
+    - Temporal patterns in fake news distribution
+    - Social network community analysis for bot detection
+
+    Attributes
+    ----------
+    vectorizer : TfidfVectorizer
+        Text vectorizer for converting articles to feature vectors
+    news_models : dict
+        Dictionary containing trained ML models for news classification
+    bot_model : RandomForestClassifier
+        Trained model for bot detection
+    news_decision_threshold : float
+        Threshold for binary classification decisions (default: 0.5)
+
+    Methods
+    -------
+    predict_news(text, domain, date, url=None)
+        Analyze news article credibility
+    predict_bot(tweet_text, user_data)
+        Detect if social media account is automated
+    find_optimal_threshold(validation_texts, validation_labels, ...)
+        Optimize decision threshold for balanced predictions
+    get_url_pagerank_score(user_url, graph=None, alpha=0.85)
+        Calculate PageRank-based credibility score for URLs
+    """
 
     def __init__(self):
-        """Initialize the classifier by loading all models and vectorizer"""
+        """
+        Initialize the CredScore classifier by loading all required models and data.
+
+        Loads text vectorizer, news classification models (Naive Bayes, Logistic Regression,
+        Decision Tree, Random Forest), and bot detection model. Displays colored status
+        messages and logs all operations.
+
+        Raises
+        ------
+        SystemExit
+            If critical models cannot be loaded, exits with code 1
+        FileNotFoundError
+            If model files are missing from expected directories
+        """
         print(f"{Fore.CYAN}Starting classification application...{Style.RESET_ALL}")
         logging.info("Starting classification application...")
 
@@ -44,6 +90,8 @@ class NewsClassifier:
             print(f"{Fore.CYAN}Loading vectorizer...{Style.RESET_ALL}")
             logging.info(f"Loading vectorizer from {self.vectorizer_path}")
             self.vectorizer = load(self.vectorizer_path)
+
+            self.news_decision_threshold = 0.5  # setting as starting default value which will be calibrated
 
             # Load news classification models
             self.news_models = {}
@@ -85,88 +133,130 @@ class NewsClassifier:
             logging.error(f"Error loading models: {str(e)}")
             sys.exit(1)
 
-    def get_url_pagerank_score(self, user_url, graph=None, alpha=0.85):
+    def set_threshold(self, threshold):
         """
-        Get PageRank score for a user-provided URL by:
-        1. Extracting its domain
-        2. Checking if it's a trusted platform
-        3. If domain exists in graph, return its score
-        4. If not, scrape its outlinks and calculate a temporary score
+        Set the decision threshold for binary classification predictions.
+
+        Parameters
+        ----------
+        threshold : float
+            Decision threshold between 0.0 and 1.0. Values above this threshold
+            are classified as 'REAL', values below as 'FAKE'
         """
-        # Extract domain from URL
-        domain = extract_domain(user_url)
-        if not domain:
-            logging.warning(f"Could not extract a valid domain from the URL: {user_url}")
-            return 0.5, "Could not extract a valid domain from the URL."
+        self.news_decision_threshold = threshold
 
-        # Check if this is a trusted platform with predefined score
-        if domain in TRUSTED_PLATFORMS:
-            trusted_score = TRUSTED_PLATFORMS[domain]
-            logging.info(f"Domain {domain} is a trusted platform with predefined score: {trusted_score}")
-            return trusted_score, f"Domain {domain} is a trusted platform with predefined score: {trusted_score}"
+    def find_optimal_threshold(self, validation_texts, validation_labels, validation_domains=None,
+                               validation_dates=None, validation_urls=None):
+        """
+        Find optimal decision threshold for balanced predictions using validation data.
 
-        # Load existing graph if not provided
-        if graph is None:
-            try:
-                # Try to load existing edges
-                edges = []
-                with open(os.path.join(STATS_DIR, "domain_edges.csv"), "r", encoding="utf-8") as f:
-                    reader = csv.reader(f)
-                    next(reader)  # Skip header
-                    for src, dst, label in reader:
-                        edges.append((src, dst, label))
+        Tests thresholds from 0.35 to 0.65 in steps of 0.02, optimizing for F1-score.
+        Uses tqdm progress bars to show optimization progress.
 
-                # Import networkx here to avoid dependency issues if not needed
-                import networkx as nx
-                graph = build_graph_from_edges(edges)
-            except Exception as e:
-                logging.error(f"Error loading existing graph: {str(e)}")
-                return 0.5, f"Error loading existing graph: {str(e)}"
+        Parameters
+        ----------
+        validation_texts : list of str
+            List of news article texts for validation
+        validation_labels : list of int
+            Ground truth labels (0 for fake, 1 for real)
+        validation_domains : list of str, optional
+            Domain names for each article
+        validation_dates : list of str, optional
+            Publication dates in YYYY-MM format
+        validation_urls : list of str, optional
+            Full URLs for PageRank analysis
 
-        try:
-            # Import networkx here to avoid dependency issues if not needed
-            import networkx as nx
+        Returns
+        -------
+        float
+            Optimal threshold value that maximizes F1-score
+        """
+        thresholds = np.arange(0.40, 0.52, 0.02)
+        best_threshold = 0.5
+        best_f1 = 0
 
-            # If domain already in graph, return its PageRank score
-            pr = nx.pagerank(graph, alpha=alpha)
-            if domain in pr:
-                rank_position = sorted(pr.values(), reverse=True).index(pr[domain]) + 1
-                logging.info(f"Domain {domain} exists in graph (rank {rank_position}/{len(pr)})")
-                return pr[domain], f"Domain {domain} exists in our database (rank {rank_position}/{len(pr)})"
+        threshold_pbar = tqdm(thresholds, desc="Testing thresholds", unit="threshold")
 
-            # If domain not in graph, fetch its outlinks and calculate temporary score
-            logging.info(f"Domain {domain} not in existing graph. Fetching outlinks...")
+        for threshold in threshold_pbar:
+            predictions = []
 
-            # Get outlinks for this domain
-            outlinks = scrape_outlinks_one(user_url)
-            if not outlinks:
-                logging.warning(f"Could not fetch any outlinks for {domain}")
-                return 0.5, f"Could not fetch any outlinks for {domain}"
+            # Inner progress bar for predictions at each threshold
+            prediction_pbar = tqdm(range(len(validation_texts)),
+                                   desc=f"Threshold {threshold:.2f}",
+                                   unit="predictions",
+                                   leave=False)
 
-            # Create temporary graph with new domain and its connections
-            temp_graph = graph.copy()
-            for src, dst in outlinks:
-                temp_graph.add_edge(src, dst)
+            for i in prediction_pbar:
+                text = validation_texts[i]
+                domain = validation_domains[i] if validation_domains else None
+                date = validation_dates[i] if validation_dates else ""
+                url = validation_urls[i] if validation_urls else None
 
-            # Calculate new PageRank scores
-            new_pr = nx.pagerank(temp_graph, alpha=alpha)
+                result = self.predict_news(text, domain, date, url)
+                if result:
+                    # Use threshold for prediction
+                    pred = 1 if result['real_probability'] > (threshold * 100) else 0
+                    predictions.append(pred)
+                else:
+                    predictions.append(0)
 
-            # Return the score for our domain
-            if domain in new_pr:
-                rank_position = sorted(new_pr.values(), reverse=True).index(new_pr[domain]) + 1
-                logging.info(f"Calculated temporary score for {domain} (rank {rank_position}/{len(new_pr)})")
-                return new_pr[domain], f"Temporary score for {domain} (rank {rank_position}/{len(new_pr)})"
-            else:
-                logging.warning(f"Domain {domain} has no connections in the graph")
-                return 0.5, f"Domain {domain} has no connections in the graph"
+            # Calculate F1 score
+            if len(predictions) == len(validation_labels):
+                f1 = f1_score(validation_labels, predictions)
 
-        except Exception as e:
-            logging.error(f"Error calculating PageRank: {str(e)}")
-            return 0.5, f"Error calculating PageRank: {str(e)}"
+                # Update threshold progress bar with current metrics
+                threshold_pbar.set_postfix({
+                    'Current F1': f'{f1:.4f}',
+                    'Best F1': f'{best_f1:.4f}',
+                    'Best Threshold': f'{best_threshold:.2f}'
+                })
 
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_threshold = threshold
 
-    def predict(self, text, domain, date, url=None):
-        """Make predictions using all models and calculate a cumulative score from multiple factors"""
+        threshold_pbar.close()
+        return best_threshold
+
+    def predict_news(self, text, domain, date, url=None):
+        """
+        Analyze news article credibility using ensemble of models and external signals.
+
+        Combines predictions from multiple ML models with domain reputation,
+        PageRank scores, and temporal patterns to produce final credibility assessment.
+
+        Scoring weights:
+        - Model prediction: 20%
+        - Domain reputation: 40%
+        - PageRank score: 40%
+
+        Parameters
+        ----------
+        text : str
+            News article text content
+        domain : str
+            Domain name of the news source
+        date : str
+            Publication date in YYYY-MM format
+        url : str, optional
+            Full URL for PageRank analysis. If provided but domain is None,
+            domain will be extracted from URL
+
+        Returns
+        -------
+        dict or None
+            Dictionary containing:
+            - prediction : int (0 for fake, 1 for real)
+            - label : str ('FAKE' or 'REAL')
+            - confidence : float (0-100, confidence in prediction)
+            - real_probability : float (0-100, probability of being real)
+            - fake_probability : float (0-100, probability of being fake)
+            - model_votes : dict (individual model predictions)
+            - score_contributions : dict (contribution from each component)
+            - component_weights : dict (weight of each scoring component)
+
+            Returns None if prediction fails due to errors
+        """
         domain_stats = self.get_domain_stats()
         date_stats = self.get_date_stats()
         year, month = self.get_year_and_month_from_date_input(date)
@@ -192,17 +282,13 @@ class NewsClassifier:
                 prediction = model.predict(X)[0]
                 results[name] = prediction
 
-                # Get probability if the model supports it
-                try:
-                    proba = model.predict_proba(X)[0]
-                    probabilities[name] = proba
-                except:
-                    # Some models might not have predict_proba
-                    probabilities[name] = [0.5, 0.5] if prediction == 1 else [0.5, 0.5]
+                # Get probability from the model
+                proba = model.predict_proba(X)[0]
+                probabilities[name] = proba
 
             # Calculate voting result
             votes = list(results.values())
-            model_score = sum(votes) / len(votes)  # Score between 0 and 1
+            model_score = sum(votes) / len(votes)  # Score between 0 and 1, hard voting score
 
             # Calculate average probabilities from models
             avg_proba = [0, 0]
@@ -214,15 +300,30 @@ class NewsClassifier:
             avg_proba[1] /= len(probabilities)
 
             # Use avg_proba[1] as the model's real probability score
-            model_real_prob = avg_proba[1]
+            model_real_prob = avg_proba[1]  # soft voting score
+
+            # Weight by model confidence
+            confidence_weighted_prob = 0
+            total_confidence = 0
+
+            for name, proba in probabilities.items():
+                confidence = max(proba)
+                confidence_weighted_prob += proba[1] * confidence
+                total_confidence += confidence
+
+            if total_confidence > 0:
+                model_real_prob = confidence_weighted_prob / total_confidence
+
+            # Combine with hard voting
+            combined_model_score = (model_score * 0.5) + (model_real_prob * 0.5)
 
             # Initialize domain and page rank scores with neutral values
-            domain_score = 0.5  # Neutral value
-            page_rank_score = 0.5  # Neutral value
+            domain_score = 0.5
+            page_rank_score = 0.5
 
             # Track contribution from each source for reporting
             score_contributions = {
-                'model_prediction': (model_real_prob - 0.5) * 0.4  # Centered around 0 for logging
+                'model_prediction': (combined_model_score - 0.5) * 0.2
             }
 
             # Extract domain from URL if provided but domain is not
@@ -238,7 +339,7 @@ class NewsClassifier:
                 fake_ratio = domain_stats[domain]
                 # Convert fake_ratio to a credibility score (1 - fake_ratio)
                 domain_score = 1.0 - fake_ratio
-                score_contributions['domain_score'] = (domain_score - 0.5) * 0.3
+                score_contributions['domain_score'] = (domain_score - 0.5) * 0.4
                 logging.info(f"Applied domain score: {domain_score}")
 
             # Get page rank and use it as a factor (higher page rank = more likely real)
@@ -246,7 +347,7 @@ class NewsClassifier:
                 pr_score, pr_message = self.get_url_pagerank_score(url)
                 if pr_score is not None:
                     page_rank_score = pr_score
-                    score_contributions['page_rank_score'] = (page_rank_score - 0.5) * 0.3
+                    score_contributions['page_rank_score'] = (page_rank_score - 0.5) * 0.4
                     logging.info(f"Applied page rank score: {page_rank_score}, {pr_message}")
 
             # Apply date-based adjustment if available
@@ -260,11 +361,11 @@ class NewsClassifier:
                 print(f"{Fore.YELLOW}Applied date-based adjustment: -{date_adjustment:.4f}{Style.RESET_ALL}")
 
             # Calculate final probability based on weighted components:
-            # 40% model prediction, 30% domain score, 30% page rank
+            # 20% model prediction, 40% domain score, 40% page rank
             final_real_probability = (
-                    (model_real_prob * 0.4) +  # 40% model prediction
-                    (domain_score * 0.3) +  # 30% domain score
-                    (page_rank_score * 0.3)  # 30% page rank score
+                    (combined_model_score * 0.2) +  # 20% model prediction
+                    (domain_score * 0.4) +  # 40% domain score
+                    (page_rank_score * 0.4)  # 40% page rank score
             )
 
             # Ensure probability is within bounds
@@ -272,7 +373,7 @@ class NewsClassifier:
             final_fake_probability = 1.0 - final_real_probability
 
             # Make final prediction
-            final_prediction = 1 if final_real_probability > 0.5 else 0
+            final_prediction = 1 if final_real_probability > self.news_decision_threshold else 0
 
             logging.info(f"Final probability - Real: {final_real_probability:.4f}, Fake: {final_fake_probability:.4f}")
             logging.info(f"Score contributions: {score_contributions}")
@@ -297,48 +398,54 @@ class NewsClassifier:
             logging.error(f"Error making prediction: {str(e)}")
             return None
 
-
-    def get_community_prediction_score(self, account_name):
-        if not account_name:
-            return 1.0  # Neutral score if no account name provided
-        # Load and build graph
-        accounts = load_accounts()
-        Gd, labels, screen = build_follow_graph(accounts)
-
-        # Find anchors and create subgraph
-        anchors = top_mentions(accounts)
-        H, anchor_ids = subgraph_around_anchors(Gd, screen, anchors, radius=2, max_nodes=4000, mutual_only=False)
-
-        # Detect communities
-        partition = louvain_partition(H)
-
-        # Analyze communities
-        community_stats = analyze_communities(H, labels, partition)
-
-        return predict_account_label(account_name, Gd, H, labels, screen, partition, community_stats, radius=2)
-
-
     def predict_bot(self, tweet_text, user_data):
         """
-        Analyze if a tweet is from a bot based on user data and tweet text
+        Analyze if a social media account is automated (bot) based on profile and content.
 
-        Parameters:
-        -----------
+        Uses ensemble approach combining:
+        - Random Forest model trained on user profile features
+        - Rule-based indicators from profile completeness analysis
+        - Tweet content analysis (hashtags, mentions, URLs)
+        - Community detection scores
+
+        Strong human indicators (with AUC scores):
+        - Verified status (0.7828)
+        - Followers/friends ratio (0.7501)
+        - Follower count (0.7357)
+        - Listed count (0.7338)
+        - Account age (0.6287)
+
+        Parameters
+        ----------
         tweet_text : str
-            The text content of the tweet
+            Text content of the tweet to analyze
         user_data : dict
-            Dictionary containing Twitter user metrics
+            Dictionary containing Twitter user metrics:
+            - followers_count : int
+            - friends_count : int
+            - verified : bool
+            - created_at : str (Twitter date format)
+            - statuses_count : int
+            - favourites_count : int
+            - listed_count : int
+            - screen_name : str
 
-        Returns:
-        --------
-        dict
-            Result dictionary with bot prediction and confidence
+        Returns
+        -------
+        dict or None
+            Dictionary containing:
+            - prediction : int (0 for bot, 1 for human)
+            - label : str ('HUMAN', 'BOT', 'UNKNOWN', or 'ERROR')
+            - confidence : float (0-100, confidence in prediction)
+            - bot_probability : float (0-100, probability of being bot)
+            - human_probability : float (0-100, probability of being human)
+            - human_indicators : dict (scores from profile analysis)
+            - tweet_features : dict (extracted tweet characteristics)
+            - community_score : dict (community detection results)
+
+            Returns None if analysis fails due to errors
         """
         try:
-            # Import warnings to suppress the sklearn feature names warning
-            import warnings
-            import re
-
             if self.bot_model is None:
                 logging.error("Bot detection model not available")
                 return {
@@ -403,7 +510,8 @@ class NewsClassifier:
 
             # Calculate human probability based on indicators
             # Maximum possible score if all indicators are at their max
-            max_possible_score = verified_weight + followers_to_friends_ratio_weight + followers_weight + listed_count_weight + account_age_weight
+            max_possible_score = verified_weight + followers_to_friends_ratio_weight + followers_weight + \
+                                 listed_count_weight + account_age_weight
             # Normalize to a probability
             human_probability = min(0.95, human_score / max_possible_score)
 
@@ -417,7 +525,9 @@ class NewsClassifier:
                 tweet_features['mentions'] = len(re.findall(r'@\w+', tweet_text))
 
                 # Number of URLs
-                tweet_features['uniqueURL'] = len(re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', tweet_text))
+                tweet_features['uniqueURL'] = len(
+                    re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+                               tweet_text))
 
                 # Unique hashtags and mentions
                 tweet_features['uniqueHashtags'] = len(set(re.findall(r'#\w+', tweet_text)))
@@ -465,11 +575,7 @@ class NewsClassifier:
             if 'listed' not in X.columns:
                 X['listed'] = X['listed_count'] if 'listed_count' in X.columns else 0.0
 
-            # Create polynomial features (interactions between features)
-            # Based on the feature importance file, we know the model was trained with these interactions
-            core_features = ['screen_name_length', 'statuses_count', 'followers_count', 'friends_count', 'favourites_count']
-
-            # Add polynomial feature interactions - EXPLICITLY listing all needed combinations
+            # Add polynomial feature interactions - explicitly listing all needed combinations
             # to ensure we have exactly what the model expects
             interaction_pairs = [
                 ('screen_name_length', 'statuses_count'),
@@ -489,15 +595,15 @@ class NewsClassifier:
                 X[interaction_name] = X[feat1] * X[feat2]
 
             # Verify we have all 29 features
-            expected_features = set([
-                'screen_name_length', 'statuses_count', 'followers_count', 'friends_count', 'favourites_count',
-                'listed_count', 'url', 'retweets', 'replies', 'favoriteC', 'hashtag', 'mentions', 'intertime',
-                'ffratio', 'favorites', 'uniqueHashtags', 'uniqueMentions', 'uniqueURL', 'listed',
-                'screen_name_length statuses_count', 'followers_count friends_count', 'screen_name_length friends_count',
-                'screen_name_length followers_count', 'followers_count favourites_count', 'friends_count favourites_count',
-                'screen_name_length favourites_count', 'statuses_count followers_count', 'statuses_count friends_count',
-                'statuses_count favourites_count'
-            ])
+            expected_features = {'screen_name_length', 'statuses_count', 'followers_count', 'friends_count',
+                                 'favourites_count', 'listed_count', 'url', 'retweets', 'replies', 'favoriteC',
+                                 'hashtag', 'mentions', 'intertime', 'ffratio', 'favorites', 'uniqueHashtags',
+                                 'uniqueMentions', 'uniqueURL', 'listed', 'screen_name_length statuses_count',
+                                 'followers_count friends_count', 'screen_name_length friends_count',
+                                 'screen_name_length followers_count', 'followers_count favourites_count',
+                                 'friends_count favourites_count', 'screen_name_length favourites_count',
+                                 'statuses_count followers_count', 'statuses_count friends_count',
+                                 'statuses_count favourites_count'}
 
             # Check if we're missing any features and add them
             missing_features = expected_features - set(X.columns)
@@ -509,11 +615,8 @@ class NewsClassifier:
             try:
                 # Try to extract feature names from the model
                 model_features = []
-                try:
-                    if hasattr(self.bot_model, 'feature_names_in_'):
-                        model_features = self.bot_model.feature_names_in_.tolist()
-                except:
-                    pass
+                if hasattr(self.bot_model, 'feature_names_in_'):
+                    model_features = self.bot_model.feature_names_in_.tolist()
 
                 # If model has feature names, ensure we have exactly those features
                 if model_features:
@@ -527,13 +630,14 @@ class NewsClassifier:
                 # Suppress the specific warning about feature names
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", category=UserWarning,
-                                            message="X has feature names, but RandomForestClassifier was fitted without feature names")
+                                            message="X has feature names, but RandomForestClassifier was fitted "
+                                                    "without feature names")
 
-                    # Now make the prediction
+                    # make the prediction
                     prediction = self.bot_model.predict(X)[0]
                     probabilities = self.bot_model.predict_proba(X)[0]
 
-                # Bot is usually labeled as 0, human as 1
+                # Bot is labeled as 0, human as 1
                 # Blend model prediction with our human indicators
                 model_human_prob = probabilities[1]
 
@@ -564,7 +668,8 @@ class NewsClassifier:
 
                 # Add tweet text score with small weight
                 text_weight = 0.15
-                human_probability = human_probability * (1 - text_weight) + (tweet_human_score / (hashtag_weight + mention_weight + url_weight)) * text_weight
+                human_probability = human_probability * (1 - text_weight) + (
+                        tweet_human_score / (hashtag_weight + mention_weight + url_weight)) * text_weight
 
                 # Use a weighted average, giving more weight to our custom indicators for the specified features
                 final_human_prob = (human_probability * 0.7) + (model_human_prob * 0.3)
@@ -610,20 +715,171 @@ class NewsClassifier:
             logging.error(f"Error in bot prediction: {str(e)}")
             return None
 
+    @staticmethod
+    def get_url_pagerank_score(user_url, graph=None, alpha=0.85):
+        """
+        Get PageRank score for a user-provided URL by:
+        1. Extracting its domain
+        2. Checking if it's a trusted platform
+        3. If domain exists in graph, return its score
+        4. If not, scrape its outlinks and calculate a temporary score
 
+        Calculate PageRank score for a URL's domain with trusted platform handling.
+
+        Computes PageRank-based credibility score by first checking
+        existing graph data and scraping outlinks for new domains
+        to calculate temporary scores.
+
+        Parameters
+        ----------
+        user_url : str
+            URL to analyze for PageRank scoring.
+        graph : networkx.DiGraph, optional
+            Existing domain graph for PageRank calculation. If None, loads
+            from domain_edges.csv file.
+        alpha : float, default=0.85
+            Damping parameter for PageRank algorithm.
+
+        Returns
+        -------
+        score : float
+            PageRank score between 0.0 and 1.0, where higher values indicate
+            more credible/authoritative domains.
+        message : str
+            Descriptive message explaining the score source and calculation.
+
+        Notes
+        -----
+        Scoring hierarchy:
+        1. Trusted platforms: Predefined high scores for major news outlets
+        2. Existing graph: PageRank from historical domain relationship data
+        3. Dynamic scraping: Temporary score from newly scraped outlinks
+        4. Fallback: 0.5 neutral score for unreachable/invalid domains
+        """
+        # Extract domain from URL
+        domain = extract_domain(user_url)
+        if not domain:
+            logging.warning(f"Could not extract a valid domain from the URL: {user_url}")
+            return 0.5, "Could not extract a valid domain from the URL."
+
+        # Load existing graph if not provided
+        if graph is None:
+            try:
+                # Try to load existing edges
+                edges = []
+                with open(os.path.join(STATS_DIR, "domain_edges.csv"), "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    next(reader)  # Skip header
+                    for src, dst, label in reader:
+                        edges.append((src, dst, label))
+
+                # Import networkx here to avoid dependency issues if not needed
+                import networkx as nx
+                graph = build_graph_from_edges(edges)
+            except Exception as e:
+                logging.error(f"Error loading existing graph: {str(e)}")
+                return 0.5, f"Error loading existing graph: {str(e)}"
+
+        try:
+            # If domain already in graph, return its PageRank score
+            pr = nx.pagerank(graph, alpha=alpha)
+            if domain in pr:
+                rank_position = sorted(pr.values(), reverse=True).index(pr[domain]) + 1
+                logging.info(f"Domain {domain} exists in graph (rank {rank_position}/{len(pr)})")
+                return pr[domain], f"Domain {domain} exists in our database (rank {rank_position}/{len(pr)})"
+
+            # If domain not in graph, fetch its outlinks and calculate temporary score
+            logging.info(f"Domain {domain} not in existing graph. Fetching outlinks...")
+
+            # Get outlinks for this domain
+            outlinks = scrape_outlinks_one(user_url)
+            if not outlinks:
+                logging.warning(f"Could not fetch any outlinks for {domain}")
+                return 0.5, f"Could not fetch any outlinks for {domain}"
+
+            # Create temporary graph with new domain and its connections
+            temp_graph = graph.copy()
+            for src, dst in outlinks:
+                temp_graph.add_edge(src, dst)
+
+            # Calculate new PageRank scores
+            new_pr = nx.pagerank(temp_graph, alpha=alpha)
+
+            # Return the score for our domain
+            if domain in new_pr:
+                rank_position = sorted(new_pr.values(), reverse=True).index(new_pr[domain]) + 1
+                logging.info(f"Calculated temporary score for {domain} (rank {rank_position}/{len(new_pr)})")
+                return new_pr[domain], f"Temporary score for {domain} (rank {rank_position}/{len(new_pr)})"
+            else:
+                logging.warning(f"Domain {domain} has no connections in the graph")
+                return 0.5, f"Domain {domain} has no connections in the graph"
+
+        except Exception as e:
+            logging.error(f"Error calculating PageRank: {str(e)}")
+            return 0.5, f"Error calculating PageRank: {str(e)}"
+
+    @staticmethod
+    def get_community_prediction_score(account_name):
+        """
+        Analyze account credibility using social network community detection.
+
+        Loads Twitter follow graph, identifies influential anchors, creates subgraph,
+        detects communities using Louvain algorithm, and predicts account label
+        based on community characteristics.
+
+        Parameters
+        ----------
+        account_name : str
+            Twitter screen name (without @) to analyze
+
+        Returns
+        -------
+        float or dict
+            Community-based credibility score or prediction result.
+            Returns 1.0 (neutral) if account_name is not provided.
+        """
+
+        if not account_name:
+            return 1.0  # Neutral score if no account name provided
+        # Load and build graph
+        accounts = load_accounts()
+        Gd, labels, screen = build_follow_graph(accounts)
+
+        # Find anchors and create subgraph
+        anchors = top_mentions(accounts)
+        H, anchor_ids = subgraph_around_anchors(Gd, screen, anchors, radius=2, max_nodes=4000, mutual_only=False)
+
+        # Detect communities
+        partition = louvain_partition(H)
+
+        # Analyze communities
+        community_stats = analyze_communities(H, labels, partition)
+
+        return predict_account_label(account_name, Gd, H, labels, screen, partition, community_stats, radius=2)
 
     @staticmethod
     def get_domain_stats():
-        """Load domain statistics from domains.txt"""
+        """
+        Load domain reputation statistics from CSV file.
+
+        Reads domains_summary.csv containing historical fake news ratios
+        for different domains to inform credibility scoring.
+
+        Returns
+        -------
+        dict
+            Dictionary mapping domain names (str) to fake ratios (float)
+            where 0.0 = never fake, 1.0 = always fake
+        """
         domain_stats = {}
         domains_path = os.path.join(STATS_DIR, 'domains_summary.csv')
         if os.path.exists(domains_path):
-            with open(domains_path, 'r') as f:
+            with open(domains_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     parts = line.strip().split(',')
                     domain = parts[0].strip().lower()
                     if domain == '﻿domain':
-                        continue  # Skip header
+                        continue
                     fake_ratio = float(parts[4].strip())
                     domain_stats[domain] = fake_ratio
         else:
@@ -632,6 +888,19 @@ class NewsClassifier:
 
     @staticmethod
     def get_date_stats():
+        """
+        Load temporal fake news statistics from CSV file.
+
+        Reads monthly_bot_data.csv containing fake news ratios by
+        year and month to identify temporal patterns.
+
+        Returns
+        -------
+        dict
+            Nested dictionary with structure:
+            {year: {month: fake_ratio}}
+            where fake_ratio is float between 0.0 and 1.0
+        """
         dates_stats = {}
         dates_path = os.path.join(STATS_DIR, 'monthly_bot_data.csv')
         if os.path.exists(dates_path):
@@ -648,27 +917,56 @@ class NewsClassifier:
                     dates_stats[year][month] = fake_ratio
         return dates_stats
 
-    def clean_text(self, text):
-        """Clean input text with the same preprocessing as training data"""
+    @staticmethod
+    def clean_text(text):
+        """
+        Preprocess text using same cleaning pipeline as training data.
+
+        Applies lowercase conversion, punctuation removal, and whitespace
+        normalization to ensure consistency with model training.
+
+        Parameters
+        ----------
+        text : str or any
+            Input text to clean. Non-string inputs converted to string.
+
+        Returns
+        -------
+        str
+            Cleaned text ready for vectorization
+        """
         logging.info("Cleaning input text...")
 
-        # Convert to string if not already
         if not isinstance(text, str):
             text = str(text)
-
-        # Lowercase
+        # lowercase text
         text = text.lower()
-
-        # Remove punctuation
+        # remove punctuation
         text = text.translate(str.maketrans('', '', string.punctuation))
-
-        # Remove extra whitespace
+        # remove extra whitespace
         text = ' '.join(text.split())
 
         return text
 
-    def get_year_and_month_from_date_input(self, date):
-        # Validate and parse date input
+    @staticmethod
+    def get_year_and_month_from_date_input(date):
+        """
+        Parse date string into year and month components.
+
+        Validates date format and extracts components for temporal analysis.
+        Expected format: "YYYY-MM" (e.g., "2024-01", "2024-12")
+
+        Parameters
+        ----------
+        date : str
+            Date string in YYYY-MM format
+
+        Returns
+        -------
+        tuple of (str, str) or (None, None)
+            Year and month as strings, or (None, None) if parsing fails.
+            Month is normalized to remove leading zeros
+        """
         if date and '-' in date:
             parts = date.split('-')
             if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -677,4 +975,3 @@ class NewsClassifier:
                     month = month[1:]
                 return year, month
         return None, None
-
