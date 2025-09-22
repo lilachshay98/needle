@@ -243,95 +243,94 @@ if __name__ == "__main__":
     # Initialize classifier
     classifier = CredScore()
 
-    # # Load the full dataset
-    # fakeddit_df = pd.read_csv(DATA / "all_validate.tsv", sep='\t')
-    # fakeddit_df = fakeddit_df.dropna(subset=['clean_title', '2_way_label'])
-    #
-    # # Create two splits
-    # validation_size = int(len(fakeddit_df) * 0.02)
-    # test_size = int(len(fakeddit_df) * 0.15)  # 15% for final evaluation
-    #
-    # # Split 1: Validation set (for threshold optimization)
-    # validation_df = fakeddit_df.sample(n=validation_size, random_state=123)
-    # remaining_df = fakeddit_df.drop(validation_df.index)
-    #
-    # # Split 2: Test set (for final evaluation)
-    # test_df = remaining_df.sample(n=test_size, random_state=42)
-    #
-    # val_texts = validation_df['clean_title'].tolist()
-    # val_labels = validation_df['2_way_label'].tolist()
-    # val_domains = validation_df['domain'].tolist() if 'domain' in validation_df.columns else None
-    # val_dates = validation_df['created_utc'].apply(safe_date_conversion).tolist()
-    # val_urls = validation_df['image_url'].tolist() if 'image_url' in validation_df.columns else None
-    #
-    # # Find optimal threshold
-    # optimal_threshold = classifier.find_optimal_threshold(validation_texts=val_texts, validation_labels=val_labels,
-    #                                                       validation_domains=val_domains, validation_dates=val_dates,
-    #                                                       validation_urls=val_urls)
-    # # Set the optimal threshold
-    # classifier.set_threshold(optimal_threshold)
-    #
-    # # Prepare test data
-    # test_df['created_date_str'] = test_df['created_utc'].apply(safe_date_conversion)
-    #
-    # X_test = test_df['clean_title'].reset_index(drop=True)
-    # y_test = test_df['2_way_label'].reset_index(drop=True)
-    #
-    # domains = test_df['domain'] if 'domain' in test_df.columns else pd.Series([None] * len(X_test))
-    # urls = test_df['url'] if 'url' in test_df.columns else pd.Series([None] * len(X_test))
-    # dates = test_df['created_date_str']
-    #
-    # # Run final predictions
-    # news_true_labels = []
-    # news_predicted_labels = []
-    # news_probability_scores = []
-    #
-    # for idx in tqdm(range(len(X_test)), desc="Final evaluation predictions"):
-    #     text = X_test.iloc[idx]
-    #     true_label = y_test.iloc[idx]
-    #
-    #     domain = domains.iloc[idx] if hasattr(domains, 'iloc') and pd.notna(domains.iloc[idx]) else None
-    #     url = urls.iloc[idx] if hasattr(urls, 'iloc') and pd.notna(urls.iloc[idx]) else None
-    #     date = dates.iloc[idx] if hasattr(dates, 'iloc') and dates.iloc[idx] != "" else ""
-    #
-    #     prediction_result = classifier.predict_news(text=text, domain=domain, date=date, url=url)
-    #
-    #     if prediction_result is not None:
-    #         predicted_label = prediction_result['prediction']
-    #         real_prob_score = prediction_result['real_probability'] / 100.0
-    #
-    #         news_true_labels.append(true_label)
-    #         news_predicted_labels.append(predicted_label)
-    #         news_probability_scores.append(real_prob_score)
-    #
-    # # Calculate confusion matrix
-    # news_cm = confusion_matrix(news_true_labels, news_predicted_labels)
-    # news_tn, news_fp, news_fn, news_tp = news_cm.ravel()
-    #
-    # # Create metrics and generate reports
-    # news_metrics = ConfusionMatrixMetrics(tp=news_tp, fp=news_fp, fn=news_fn, tn=news_tn)
-    #
-    # news_report = news_metrics.report()
-    # print("=== OPTIMIZED NEWS ARTICLES EVALUATION ===")
-    # print("Confusion Matrix:\n", news_metrics.confusion_matrix())
-    # print(f"True Negatives (TN): {news_tn}")
-    # print(f"False Positives (FP): {news_fp}")
-    # print(f"False Negatives (FN): {news_fn}")
-    # print(f"True Positives (TP): {news_tp}")
-    # print("Metrics report:")
-    # for k, v in news_report.items():
-    #     print(f"{k.capitalize()}: {v:.4f}")
-    #
-    # # Convert to numpy arrays for plotting
-    # news_true_labels = np.array(news_true_labels)
-    # news_probability_scores = np.array(news_probability_scores)
-    #
-    # # Create visualizations
-    # news_metrics.plot_roc_curve(news_true_labels, news_probability_scores,
-    #                             "News Articles Detection ROC Curve",
-    #                             FIGS / "news_roc_curve.png")
+    # Load the full dataset
+    fakeddit_df = pd.read_csv(DATA / "all_validate.tsv", sep='\t')
+    fakeddit_df = fakeddit_df.dropna(subset=['clean_title', '2_way_label'])
+    
+    # Create two splits
+    validation_size = int(len(fakeddit_df) * 0.02)
+    test_size = int(len(fakeddit_df) * 0.15)  # 15% for final evaluation
+    
+    # Split 1: Validation set (for threshold optimization)
+    validation_df = fakeddit_df.sample(n=validation_size, random_state=123)
+    remaining_df = fakeddit_df.drop(validation_df.index)
+    
+    # Split 2: Test set (for final evaluation)
+    test_df = remaining_df.sample(n=test_size, random_state=42)
+    
+    val_texts = validation_df['clean_title'].tolist()
+    val_labels = validation_df['2_way_label'].tolist()
+    val_domains = validation_df['domain'].tolist() if 'domain' in validation_df.columns else None
+    val_dates = validation_df['created_utc'].apply(safe_date_conversion).tolist()
+    val_urls = validation_df['image_url'].tolist() if 'image_url' in validation_df.columns else None
+    
+    # Find optimal threshold
+    optimal_threshold = classifier.find_optimal_threshold(validation_texts=val_texts, validation_labels=val_labels,
+                                                          validation_domains=val_domains, validation_dates=val_dates,
+                                                          validation_urls=val_urls)
+    # Set the optimal threshold
+    classifier.set_threshold(optimal_threshold)
+    
+    # Prepare test data
+    test_df['created_date_str'] = test_df['created_utc'].apply(safe_date_conversion)
+    
+    X_test = test_df['clean_title'].reset_index(drop=True)
+    y_test = test_df['2_way_label'].reset_index(drop=True)
+    
+    domains = test_df['domain'] if 'domain' in test_df.columns else pd.Series([None] * len(X_test))
+    urls = test_df['url'] if 'url' in test_df.columns else pd.Series([None] * len(X_test))
+    dates = test_df['created_date_str']
+    
+    # Run final predictions
+    news_true_labels = []
+    news_predicted_labels = []
+    news_probability_scores = []
+    
+    for idx in tqdm(range(len(X_test)), desc="Final evaluation predictions"):
+        text = X_test.iloc[idx]
+        true_label = y_test.iloc[idx]
+    
+        domain = domains.iloc[idx] if hasattr(domains, 'iloc') and pd.notna(domains.iloc[idx]) else None
+        url = urls.iloc[idx] if hasattr(urls, 'iloc') and pd.notna(urls.iloc[idx]) else None
+        date = dates.iloc[idx] if hasattr(dates, 'iloc') and dates.iloc[idx] != "" else ""
+    
+        prediction_result = classifier.predict_news(text=text, domain=domain, date=date, url=url)
+    
+        if prediction_result is not None:
+            predicted_label = prediction_result['prediction']
+            real_prob_score = prediction_result['real_probability'] / 100.0
+    
+            news_true_labels.append(true_label)
+            news_predicted_labels.append(predicted_label)
+            news_probability_scores.append(real_prob_score)
+    
+    # Calculate confusion matrix
+    news_cm = confusion_matrix(news_true_labels, news_predicted_labels)
+    news_tn, news_fp, news_fn, news_tp = news_cm.ravel()
+    
+    # Create metrics and generate reports
+    news_metrics = ConfusionMatrixMetrics(tp=news_tp, fp=news_fp, fn=news_fn, tn=news_tn)
+    
+    news_report = news_metrics.report()
+    print("=== OPTIMIZED NEWS ARTICLES EVALUATION ===")
+    print("Confusion Matrix:\n", news_metrics.confusion_matrix())
+    print(f"True Negatives (TN): {news_tn}")
+    print(f"False Positives (FP): {news_fp}")
+    print(f"False Negatives (FN): {news_fn}")
+    print(f"True Positives (TP): {news_tp}")
+    print("Metrics report:")
+    for k, v in news_report.items():
+        print(f"{k.capitalize()}: {v:.4f}")
+    
+    # Convert to numpy arrays for plotting
+    news_true_labels = np.array(news_true_labels)
+    news_probability_scores = np.array(news_probability_scores)
+    
+    # Create visualizations
+    news_metrics.plot_roc_curve(news_true_labels, news_probability_scores,
+                                "News Articles Detection ROC Curve",
+                                FIGS / "news_roc_curve.png")
 
-    #
     # Bot Detection evaluation
 
     # load the test dataset
